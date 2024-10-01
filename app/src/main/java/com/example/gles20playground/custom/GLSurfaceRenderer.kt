@@ -1,117 +1,197 @@
 package com.example.gles20playground.custom
 
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Rect
 import android.opengl.GLES20
 import android.opengl.GLSurfaceView
-import android.util.Log
+import android.opengl.GLUtils
+import android.opengl.Matrix
+import com.example.gles20playground.util.MyGLUtils
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
-import java.nio.ShortBuffer
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 
 class GLSurfaceRenderer : GLSurfaceView.Renderer {
-    private val squareVerticesArray = floatArrayOf(
-        -0.5f, -0.5f, // bottom left 0
-        0.5f, -0.5f, // bottom right 1
-        0.5f, 0.5f, // top right 2
-        -0.5f, 0.5f, // top left 3
-    )
 
-    private val indexArrayOrDrawOrder = shortArrayOf(
-        0, 1, 2,
-        2, 3, 0
-    )
+    private val vertexShaderSource = """
+    uniform mat4 uMatrix;
+    attribute vec4 a_position;
+    attribute vec2 a_texCoord;
+    varying vec2 v_texCoord;
 
-    // Set color with red, green, blue and alpha (opacity) values
-    private val color = floatArrayOf(0.63671875f, 0.76953125f, 0.22265625f, 1.0f)
-
-    private var squareVertexBuffer: FloatBuffer? = null
-    private var indexBuffer: ShortBuffer? = null
-
-    private var program = 0
-    private val vertexShader = """
-    attribute vec4 position;
-    void main()
-    {
-        gl_Position = position;
+    void main() {
+        gl_Position = uMatrix * a_position;
+        v_texCoord = a_texCoord;
     }
+
 """.trimIndent()
 
-    private val fragmentShader = """
+    private val fragmentShaderSource = """
     precision mediump float;
-    uniform vec4 color;
-    void main()
-    {
-        gl_FragColor = color;
+    uniform sampler2D u_texture;
+    varying vec2 v_texCoord;
+    void main() {
+        gl_FragColor = texture2D(u_texture, v_texCoord);
     }
 """.trimIndent()
 
+    private var programHandle = 0
+    private var positionHandle = 0
+    private var texCoordHandle = 0
+    private var textureUniformHandle = 0
+    private var textureHandle = 0
+
+    private val vertexData = floatArrayOf(
+        // X, Y, Z,  U,  V
+        -1f, -1f, 0f,  0f, 0f,   // Bottom-left
+        1f, -1f, 0f,  1f, 0f,   // Bottom-right
+        -1f,  1f, 0f,  0f, 1f,   // Top-left
+        1f,  1f, 0f,  1f, 1f    // Top-right
+    )
+
+    private lateinit var vertexBuffer: FloatBuffer
+    private lateinit var textBitmap: Bitmap
+
+    // Create a rotation matrix (identity matrix)
+    private val rotationMatrix = FloatArray(16)
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         GLES20.glClearColor(0.5f, 0.5f, 0.5f, 1.0f)
-        squareVertexBuffer = // (number of coordinate values * 4 bytes per float)
-            ByteBuffer.allocateDirect(squareVerticesArray.size * Float.SIZE_BYTES).run {
-                // use the device hardware's native byte order
-                order(ByteOrder.nativeOrder())
 
-                // create a floating point buffer from the ByteBuffer
-                asFloatBuffer().apply {
-                    // add the coordinates to the FloatBuffer
-                    put(squareVerticesArray)
-                    // set the buffer to read the first coordinate
-                    position(0)
-                }
-            }
+        // Compile shaders and link program
+        programHandle = MyGLUtils.createProgram(vertexShaderSource, fragmentShaderSource)
 
-        indexBuffer = ByteBuffer.allocateDirect(indexArrayOrDrawOrder.size * Short.SIZE_BYTES).run {
-            order(ByteOrder.nativeOrder())
-            asShortBuffer().apply {
-                put(indexArrayOrDrawOrder)
-                position(0)
-            }
-        }
+        positionHandle = GLES20.glGetAttribLocation(programHandle, "a_position")
+        texCoordHandle = GLES20.glGetAttribLocation(programHandle, "a_texCoord")
+        textureUniformHandle = GLES20.glGetUniformLocation(programHandle, "u_texture")
 
-        program = GLES20.glCreateProgram()
-        val vs = compileShader(GLES20.GL_VERTEX_SHADER, vertexShader)
-        val fs = compileShader(GLES20.GL_FRAGMENT_SHADER, fragmentShader)
-        GLES20.glAttachShader(program, vs)
-        GLES20.glAttachShader(program, fs)
-        GLES20.glLinkProgram(program)
+        // Create a buffer for vertex data
+        vertexBuffer = ByteBuffer.allocateDirect(vertexData.size * 4)
+            .order(ByteOrder.nativeOrder())
+            .asFloatBuffer()
+            .put(vertexData)
+        vertexBuffer.position(0)
+
+        // Generate texture for text
+        textBitmap = createTextBitmap("Hello World")
+        textureHandle = loadTexture(textBitmap)
+
+        // Initialize in onSurfaceCreated()
+        Matrix.setIdentityM(rotationMatrix, 0)
+        // Rotate 180 degrees along the X-axis and Y-axis
+        Matrix.rotateM(rotationMatrix, 0, 180f, 1f, 0f, 0f)
+//        Matrix.rotateM(rotationMatrix, 0, 180f, 0f, 1f, 0f)
     }
 
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
         GLES20.glViewport(0, 0, width, height)
+
+        // Calculate the aspect ratio of the bitmap and surface
+        val bitmapAspectRatio = textBitmap.width.toFloat() / textBitmap.height
+        val surfaceAspectRatio = width.toFloat() / height
+
+        // Adjust the quad’s vertex data to maintain the aspect ratio
+        val scaleX: Float
+        val scaleY: Float
+
+        if (bitmapAspectRatio > surfaceAspectRatio) {
+            // If the bitmap is wider, adjust the height
+            scaleX = 1f
+            scaleY = surfaceAspectRatio / bitmapAspectRatio
+        } else {
+            // If the bitmap is taller, adjust the width
+            scaleX = bitmapAspectRatio / surfaceAspectRatio
+            scaleY = 1f
+        }
+
+        // Set the new vertex data for proper scaling
+        val vertexData = floatArrayOf(
+            // X, Y, Z, U, V
+            -scaleX, -scaleY, 0f, 0f, 0f,   // Bottom-left
+            scaleX, -scaleY, 0f, 1f, 0f,   // Bottom-right
+            -scaleX,  scaleY, 0f, 0f, 1f,   // Top-left
+            scaleX,  scaleY, 0f, 1f, 1f    // Top-right
+        )
+
+        // Update vertex buffer with new data
+        vertexBuffer.put(vertexData).position(0)
     }
+
 
     override fun onDrawFrame(gl: GL10?) {
-        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
-        GLES20.glClearColor(0.5f, 0.5f, 0.5f, 1.0f)
-        GLES20.glUseProgram(program)
-        val vertexPositionArray = GLES20.glGetAttribLocation(program, "position")
-        GLES20.glVertexAttribPointer(vertexPositionArray, 2, GLES20.GL_FLOAT, false, 2 * Float.SIZE_BYTES, squareVertexBuffer)
-        GLES20.glEnableVertexAttribArray(vertexPositionArray)
 
-        val colorPointer = GLES20.glGetUniformLocation(program, "color")
-        GLES20.glUniform4fv(colorPointer, 1, color, 0)
 
-        GLES20.glDrawElements(GLES20.GL_TRIANGLES, 6, GLES20.GL_UNSIGNED_SHORT, indexBuffer)
+        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
 
-        GLES20.glDisableVertexAttribArray(vertexPositionArray)
+        // Use the shader program
+        GLES20.glUseProgram(programHandle)
 
+        // Enable vertex position
+        GLES20.glEnableVertexAttribArray(positionHandle)
+        GLES20.glVertexAttribPointer(positionHandle, 3, GLES20.GL_FLOAT, false, 20, vertexBuffer)
+
+        // Enable texture coordinates
+        vertexBuffer.position(3)
+        GLES20.glEnableVertexAttribArray(texCoordHandle)
+        GLES20.glVertexAttribPointer(texCoordHandle, 2, GLES20.GL_FLOAT, false, 20, vertexBuffer)
+
+        // Pass the matrix to the shader
+        val uMatrixLocation = GLES20.glGetUniformLocation(programHandle, "uMatrix")
+        GLES20.glUniformMatrix4fv(uMatrixLocation, 1, false, rotationMatrix, 0)
+
+
+        // Bind texture
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureHandle)
+        GLES20.glUniform1i(textureUniformHandle, 0)
+
+        // Draw the quad
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+
+        // Cleanup
+        GLES20.glDisableVertexAttribArray(positionHandle)
+        GLES20.glDisableVertexAttribArray(texCoordHandle)
+        GLES20.glUseProgram(0)
     }
 
-    private fun compileShader(type: Int, source: String): Int {
-        val id = GLES20.glCreateShader(type)
-        GLES20.glShaderSource(id, source)
-        GLES20.glCompileShader(id)
-        val result = IntArray(1)
-        GLES20.glGetShaderiv(id, GLES20.GL_COMPILE_STATUS, result, 0)
-        if (result[0] == GLES20.GL_FALSE) {
-            Log.i("TAG", "compileShader: Failed to compile shader ${GLES20.glGetShaderInfoLog(id)}")
-            GLES20.glDeleteShader(id)
-            return 0
+
+    private fun createTextBitmap(text: String): Bitmap {
+        val paint = Paint().apply {
+            color = Color.WHITE
+            textSize = 120f
+            textAlign = Paint.Align.LEFT
+            isAntiAlias = true
         }
-        return id
+
+        val bounds = Rect()
+        paint.getTextBounds(text, 0, text.length, bounds)
+
+        val bitmap = Bitmap.createBitmap(bounds.width(), bounds.height(), Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        canvas.drawText(text, -bounds.left.toFloat(), -bounds.top.toFloat(), paint)
+        return bitmap
+    }
+
+    private fun loadTexture(bitmap: Bitmap): Int {
+        val textureHandles = IntArray(1)
+        GLES20.glGenTextures(1, textureHandles, 0)
+
+        if (textureHandles[0] != 0) {
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureHandles[0])
+
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+
+            GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bitmap, 0)
+
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0)
+        }
+
+        return textureHandles[0]
     }
 }
