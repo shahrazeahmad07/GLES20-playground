@@ -2,6 +2,7 @@ package com.example.gles20playground.custom
 
 import android.opengl.GLES20
 import android.opengl.GLSurfaceView
+import android.opengl.Matrix
 import com.example.gles20playground.util.MyGLUtils
 import java.nio.FloatBuffer
 import javax.microedition.khronos.egl.EGLConfig
@@ -18,31 +19,34 @@ class GLSurfaceRenderer : GLSurfaceView.Renderer {
     private var programHandle = 0
     private var positionCoordHandle = 0
     private var textureCoordHandle = 0
-    private var textureDataUniformHandle = 0
-    private var textureDataHandle = 0
+    private var mvpMatrixHandle = 0
+    private var textureHandle = 0
+    private var bitmapTextureDataHandle = 0
     private var textureWidth = 0
     private var textureHeight = 0
+    private var mvpMatrix = FloatArray(16)
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         GLES20.glClearColor(0.5f, 0.5f, 0.5f, 1.0f)
 
         val vertexSource = """
-    attribute vec4 a_position;
-    attribute vec2 a_texCoord;
-    varying vec2 v_texCoord;
-    void main() {
-        gl_Position = a_position;
-        v_texCoord = a_texCoord;
-    }
-""".trimIndent()
+            attribute vec4 a_position;
+            attribute vec2 a_texCoord;
+            uniform mat4 u_mVPMatrix;
+            varying vec2 v_texCoord;
+            void main() {
+                gl_Position = u_mVPMatrix * a_position;
+                v_texCoord = a_texCoord;
+            }
+        """.trimIndent()
         val fragmentSource = """
-    precision mediump float;
-    uniform sampler2D u_texture;
-    varying vec2 v_texCoord;
-    void main() {
-        gl_FragColor = texture2D(u_texture, v_texCoord);
-    }
-""".trimIndent()
+            precision mediump float;
+            uniform sampler2D u_texture;
+            varying vec2 v_texCoord;
+            void main() {
+                gl_FragColor = texture2D(u_texture, v_texCoord);
+            }
+        """.trimIndent()
 
         val positionCoordinates = floatArrayOf(
             -1f, 1f, 0f, // top left
@@ -68,14 +72,18 @@ class GLSurfaceRenderer : GLSurfaceView.Renderer {
         programHandle = MyGLUtils.createProgram(vertexSource, fragmentSource)
 
         val textBitmap = MyGLUtils.createTextBitmap("Hello World!")
-        textureDataHandle = MyGLUtils.createTextureDataHandleFromBitmap(textBitmap)
+        bitmapTextureDataHandle = MyGLUtils.createTextureDataHandleFromBitmap(textBitmap)
         //! no need of that bitmap anymore
         textureWidth = textBitmap.width
         textureHeight = textBitmap.height
         textBitmap.recycle()
         positionCoordHandle = GLES20.glGetAttribLocation(programHandle, "a_position")
         textureCoordHandle = GLES20.glGetAttribLocation(programHandle, "a_texCoord")
-        textureDataUniformHandle = GLES20.glGetUniformLocation(programHandle, "u_texture")
+        textureHandle = GLES20.glGetUniformLocation(programHandle, "u_texture")
+        mvpMatrixHandle = GLES20.glGetUniformLocation(programHandle, "u_mVPMatrix")
+        Matrix.setIdentityM(mvpMatrix, 0)
+        //! if you want to rotate, here is the line you need to add
+//        Matrix.rotateM(mvpMatrix, 0, 90f, 0f, 0f, 1f)
     }
 
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
@@ -116,9 +124,11 @@ class GLSurfaceRenderer : GLSurfaceView.Renderer {
         GLES20.glEnableVertexAttribArray(textureCoordHandle)
         GLES20.glVertexAttribPointer(textureCoordHandle, coordsPerTextureVertex, GLES20.GL_FLOAT, false, coordsPerTextureVertex * Float.SIZE_BYTES, textureCoordinatesBuffer)
 
+        GLES20.glUniformMatrix4fv(mvpMatrixHandle, 1, false, mvpMatrix, 0)
+
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureDataHandle)
-        GLES20.glUniform1i(textureDataUniformHandle, 0)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, bitmapTextureDataHandle)
+        GLES20.glUniform1i(textureHandle, 0)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
         GLES20.glDisable(GLES20.GL_BLEND)
 
