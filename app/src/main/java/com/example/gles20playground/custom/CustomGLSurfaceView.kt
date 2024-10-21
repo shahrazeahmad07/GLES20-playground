@@ -12,5 +12,6 @@ class CustomGLSurfaceView @JvmOverloads constructor (context: Context, attribute
         setEGLContextClientVersion(2)
         renderer = GLSurfaceRenderer()
         setRenderer(renderer)
+        renderMode = RENDERMODE_WHEN_DIRTY
     }
 }
